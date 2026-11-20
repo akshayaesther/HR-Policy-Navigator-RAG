@@ -205,8 +205,8 @@ def test_hybrid_search_metadata_filter(search_engine: HybridSearchEngine) -> Non
         assert r.source == "WFH_Policy.pdf"
 
 
-def test_hybrid_rerank_uses_top_20_and_returns_top_5() -> None:
-    """Verify that reranking sees 20 fused candidates and returns exactly five."""
+def test_hybrid_rerank_respects_top_k_between_one_and_twenty() -> None:
+    """Verify reranking accepts requested result counts from one through twenty."""
 
     class CandidateRetriever:
         def __init__(self, candidates: list[SearchResult]) -> None:
@@ -220,7 +220,7 @@ def test_hybrid_rerank_uses_top_20_and_returns_top_5() -> None:
     class RecordingReranker:
         def __init__(self) -> None:
             self.candidate_count = 0
-            self.top_k: int | None = None
+            self.top_k_values: list[int] = []
 
         def rerank(
             self,
@@ -229,7 +229,7 @@ def test_hybrid_rerank_uses_top_20_and_returns_top_5() -> None:
             top_k: int = 5,
         ) -> list[SearchResult]:
             self.candidate_count = len(candidates)
-            self.top_k = top_k
+            self.top_k_values.append(top_k)
             return candidates[:top_k]
 
     candidates = [
@@ -245,15 +245,18 @@ def test_hybrid_rerank_uses_top_20_and_returns_top_5() -> None:
         reranker=reranker,  # type: ignore[arg-type]
     )
 
-    results = engine.search("policy query", mode="hybrid_rerank")
-
-    assert dense.requested_k == [20]
-    assert bm25.requested_k == [20]
+    results = engine.search("policy query", mode="hybrid_rerank", top_k=3)
     assert reranker.candidate_count == 20
-    assert reranker.top_k == 5
-    assert len(results) == 5
-    with pytest.raises(ValueError, match="always returns top 5"):
-        engine.search("policy query", mode="hybrid_rerank", top_k=3)
+    assert reranker.top_k_values == [3]
+    assert len(results) == 3
+
+    default_results = engine.search("policy query", mode="hybrid_rerank")
+    assert reranker.top_k_values == [3, 5]
+    assert len(default_results) == 5
+    with pytest.raises(ValueError, match="between 1 and 20"):
+        engine.search("policy query", mode="hybrid_rerank", top_k=21)
+    with pytest.raises(ValueError, match="between 1 and 20"):
+        engine.search("policy query", mode="hybrid_rerank", top_k=0)
 
 
 def test_hybrid_search_invalid_mode_raises(search_engine: HybridSearchEngine) -> None:

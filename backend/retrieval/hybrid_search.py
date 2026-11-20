@@ -121,16 +121,16 @@ class HybridSearchEngine:
             - 'dense': Semantic dense vector retrieval via ChromaDB.
             - 'bm25': Lexical keyword retrieval via the persistent BM25Plus index.
             - 'hybrid': Reciprocal Rank Fusion of dense and BM25 results (k=60).
-            - 'hybrid_rerank': RRF of top 20 candidates followed by Cross-Encoder reranking
-                               returning the top 5 highest-scoring results.
+            - 'hybrid_rerank': RRF of top 20 candidates followed by Cross-Encoder reranking.
 
-        top_k applies to dense, bm25, and hybrid modes. The hybrid_rerank mode always
-        returns up to five results, as required by the retrieval pipeline.
+        For hybrid_rerank, top_k must be between 1 and 20 and defaults to five.
         """
-        if mode == "hybrid_rerank" and top_k not in (None, 5):
-            raise ValueError("hybrid_rerank always returns top 5; top_k must be omitted or 5")
+        if mode == "hybrid_rerank" and top_k is not None and not 1 <= top_k <= 20:
+            raise ValueError("hybrid_rerank top_k must be between 1 and 20")
 
-        target_top_k = top_k or self.settings.vector_top_k
+        target_top_k = top_k if top_k is not None else (
+            5 if mode == "hybrid_rerank" else self.settings.vector_top_k
+        )
 
         if mode == "dense":
             return self.vector_store.search(
@@ -183,11 +183,11 @@ class HybridSearchEngine:
             )
             top_fused_candidates = fused[:20]
 
-            # 3. Rerank the top 20 candidates with cross-encoder and return top 5
+            # 3. Rerank the top 20 candidates and return the requested number.
             reranked = self.reranker.rerank(
                 query=query,
                 candidates=top_fused_candidates,
-                top_k=5,
+                top_k=target_top_k,
             )
             return reranked
 
@@ -221,8 +221,8 @@ def hybrid_search(
         query: Natural language user query.
         mode: Retrieval strategy ('hybrid', 'dense', 'bm25', 'hybrid_rerank').
         filters: Optional metadata filters (e.g. {'category': 'hr_policy', 'source': 'WFH_Policy.pdf'}).
-        top_k: Optional result count for dense, bm25, and hybrid modes. For hybrid_rerank,
-            omit this or set it to 5.
+        top_k: Optional result count. hybrid_rerank accepts values from 1 through 20
+            and defaults to 5.
 
     Returns:
         List[SearchResult] ordered by relevance.

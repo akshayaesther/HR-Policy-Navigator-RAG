@@ -47,9 +47,6 @@ class Settings(BaseSettings):
     ollama_temperature: float = 0.0
     ollama_request_timeout: float = 60.0
 
-    # Fallback / Refusal Response
-    refusal_response: str = "I cannot answer based on internal documentation."
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -83,3 +83,25 @@ pytest
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 API documentation is accessible at `http://127.0.0.1:8000/docs`.
+
+### Policy API
+
+- `POST /documents/upload` — upload and index a `.pdf` or `.md` policy (maximum 20 MB).
+- `GET /documents` — list stored policy files.
+- `DELETE /documents/{id}` — remove a policy and its indexed chunks.
+- `POST /ask` — retrieve policy passages and return a cited answer.
+- `GET /health` — check API health.
+
+Example question request:
+
+```json
+{
+  "query": "How many paid annual leave days do employees get?",
+  "mode": "hybrid_rerank"
+}
+```
+
+The answer response includes `answer`, document/page/section `citations`, the retrieved
+chunks and relevance scores, the selected mode, request latency, and a `refused` flag.
+The API uses the configured local Ollama model and returns the fixed refusal when no
+relevant reranked evidence is available.
