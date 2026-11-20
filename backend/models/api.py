@@ -1,5 +1,6 @@
 """Request and response models for the public API."""
 
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,7 @@ class AskRequest(BaseModel):
     mode: RetrievalMode = "hybrid_rerank"
     filters: Optional[Dict[str, Any]] = None
     top_k: Optional[int] = Field(default=None, ge=1, le=20)
+    as_of_date: Optional[date] = None
 
 
 class Citation(BaseModel):
@@ -22,6 +24,8 @@ class Citation(BaseModel):
     document: str
     page: int
     section: str
+    version: Optional[str] = None
+    effective_date: Optional[date] = None
 
 
 class RetrievedChunk(BaseModel):
@@ -34,6 +38,9 @@ class RetrievedChunk(BaseModel):
     section: str
     score: float
     rank: int
+    doc_id: Optional[str] = None
+    version: Optional[str] = None
+    effective_date: Optional[date] = None
 
 
 class AskResponse(BaseModel):
@@ -53,6 +60,11 @@ class DocumentInfo(BaseModel):
     id: str
     filename: str
     size_bytes: int
+    doc_id: str
+    version: Optional[str] = None
+    effective_date: Optional[date] = None
+    status: str
+    file_hash: str
 
 
 class DocumentUploadResponse(BaseModel):
@@ -60,7 +72,29 @@ class DocumentUploadResponse(BaseModel):
 
     id: str
     filename: str
+    doc_id: str
+    version: Optional[str] = None
+    effective_date: Optional[date] = None
+    status: str
+    file_hash: str
     chunks_indexed: int
+    skipped: bool = False
+
+
+class PolicySectionChange(BaseModel):
+    """Section-level difference between two policy versions."""
+
+    section: str
+    change: str
+
+
+class PolicyChangesResponse(BaseModel):
+    """Summary of section changes between the latest policy versions."""
+
+    doc_id: str
+    from_version: Optional[str] = None
+    to_version: Optional[str] = None
+    changes: List[PolicySectionChange]
 
 
 class HealthResponse(BaseModel):

@@ -25,6 +25,7 @@ def api_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main_module, "get_settings", lambda: settings)
     monkeypatch.setattr(main_module, "index_chunks", lambda chunks: None)
     monkeypatch.setattr(main_module, "delete_by_source", lambda source: None)
+    monkeypatch.setattr(main_module, "update_policy_status", lambda **kwargs: None)
     return TestClient(main_module.app)
 
 
@@ -41,7 +42,14 @@ def make_result(score: float = 0.8) -> SearchResult:
         extraction_method="text",
         score=score,
         rank=1,
-        metadata={},
+        doc_id="leave_policy",
+        version="1.0",
+        effective_date="2024-01-01",
+        metadata={
+            "doc_id": "leave_policy",
+            "version": "1.0",
+            "effective_date": "2024-01-01",
+        },
     )
 
 
@@ -88,9 +96,16 @@ def test_ask_returns_document_page_section_citations(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "Employees receive 20 paid annual leave days."
+    assert data["answer"].startswith("Employees receive 20 paid annual leave days.")
+    assert "version 1.0, effective 2024-01-01" in data["answer"]
     assert data["citations"] == [
-        {"document": "Leave_Policy.pdf", "page": 2, "section": "Annual Leave"}
+        {
+            "document": "Leave_Policy.pdf",
+            "page": 2,
+            "section": "Annual Leave",
+            "version": "1.0",
+            "effective_date": "2024-01-01",
+        }
     ]
     assert data["retrieved_chunks"][0]["score"] == 0.8
     assert data["mode"] == "hybrid_rerank"
@@ -178,14 +193,69 @@ def test_delete_removes_document_and_index_entries(
     assert api_client.get("/documents").json() == []
 
 
-def test_upload_rejects_duplicate_document_filename(api_client: TestClient) -> None:
-    """An existing document is not silently overwritten or reindexed."""
+def test_upload_skips_duplicate_file_hash(api_client: TestClient) -> None:
+    """Re-uploading identical bytes is idempotent and reports that it was skipped."""
     uploaded_file = ("same.md", b"Policy text.", "text/markdown")
     assert api_client.post("/documents/upload", files={"file": uploaded_file}).status_code == 201
 
     response = api_client.post("/documents/upload", files={"file": uploaded_file})
 
-    assert response.status_code == 409
+    assert response.status_code == 200
+    assert response.json()["skipped"] is True
+    assert response.json()["chunks_indexed"] == 0
+
+
+def test_upload_removes_file_when_indexing_fails(
+    api_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed index operation must not leave an unregistered document behind."""
+    deleted_sources: list[str] = []
+
+    def fail_index(chunks: list[DocumentChunk]) -> None:
+        raise RuntimeError("Embedding service unavailable")
+
+    monkeypatch.setattr(main_module, "index_chunks", fail_index)
+    monkeypatch.setattr(main_module, "delete_by_source", deleted_sources.append)
+    response = api_client.post(
+        "/documents/upload",
+        files={"file": ("failed.md", b"Policy text.", "text/markdown")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Document indexing failed; the uploaded file was removed."
+    )
+    assert deleted_sources == ["failed.md"]
+    assert not (tmp_path / "documents" / "failed.md").exists()
+    assert api_client.get("/documents").json() == []
+
+
+def test_new_version_with_same_filename_is_preserved(api_client: TestClient) -> None:
+    """A changed file with the same original filename is stored as a new version."""
+    first = (
+        "leave.md",
+        b"Leave policy\nVersion: 1.0\nEffective Date: 2024-01-01\n\n## Annual Leave\n20 days.",
+        "text/markdown",
+    )
+    second = (
+        "leave.md",
+        b"Leave policy\nVersion: 2.0\nEffective Date: 2025-04-01\n\n## Annual Leave\n24 days.",
+        "text/markdown",
+    )
+    assert api_client.post("/documents/upload", files={"file": first}).status_code == 201
+
+    response = api_client.post("/documents/upload", files={"file": second})
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["doc_id"] == "leave"
+    assert data["version"] == "2.0"
+    assert data["filename"] != "leave.md"
+    documents = api_client.get("/documents").json()
+    assert len(documents) == 2
+    assert {document["status"] for document in documents} == {"active", "superseded"}
 
 
 def test_ask_reports_ollama_offline_clearly(

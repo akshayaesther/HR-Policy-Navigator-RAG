@@ -72,6 +72,50 @@ class BM25Index:
 
         return deleted_count
 
+    def update_policy_status(
+        self,
+        doc_id: str,
+        version: Optional[str],
+        status: str,
+        persist: bool = True,
+    ) -> int:
+        """Update lifecycle metadata for one version without re-tokenizing content."""
+        updated_count = 0
+        for chunk in self.chunks:
+            if chunk.doc_id != doc_id or (version is not None and chunk.version != version):
+                continue
+            chunk.status = status  # type: ignore[assignment]
+            updated_count += 1
+        if updated_count and persist:
+            self.save()
+        return updated_count
+
+    def update_document_metadata(
+        self,
+        source: str,
+        *,
+        doc_id: str,
+        version: Optional[str],
+        effective_date: Optional[str],
+        status: str,
+        file_hash: str,
+        persist: bool = True,
+    ) -> int:
+        """Backfill document-level metadata without rebuilding BM25 tokenization."""
+        updated_count = 0
+        for chunk in self.chunks:
+            if chunk.source != source:
+                continue
+            chunk.doc_id = doc_id
+            chunk.version = version
+            chunk.effective_date = effective_date
+            chunk.status = status  # type: ignore[assignment]
+            chunk.file_hash = file_hash
+            updated_count += 1
+        if updated_count and persist:
+            self.save()
+        return updated_count
+
     def search(
         self,
         query: str,
@@ -94,11 +138,8 @@ class BM25Index:
             chunk = self.chunks[idx]
 
             # Filter evaluation
-            if filters:
-                meta = chunk.to_metadata()
-                match = all(meta.get(key) == val for key, val in filters.items())
-                if not match:
-                    continue
+            if filters and not _matches_filters(chunk.to_metadata(), filters):
+                continue
 
             doc_token_set = set(self.corpus_tokens[idx])
             if score > 0.0 or any(t in doc_token_set for t in query_tokens):
@@ -122,6 +163,11 @@ class BM25Index:
                     extraction_method=chunk.extraction_method,
                     score=round(score, 4),
                     rank=rank,
+                    doc_id=chunk.doc_id,
+                    version=chunk.version,
+                    effective_date=chunk.effective_date,
+                    status=chunk.status,
+                    file_hash=chunk.file_hash,
                     metadata=chunk.to_metadata(),
                 )
             )
@@ -159,6 +205,31 @@ class BM25Index:
             return True
         except Exception:
             return False
+
+
+def _matches_filters(metadata: Dict[str, Any], filters: Dict[str, Any]) -> bool:
+    """Evaluate the Chroma-style boolean metadata filters used by both retrievers."""
+    for key, expected in filters.items():
+        if key == "$and":
+            if not all(_matches_filters(metadata, condition) for condition in expected):
+                return False
+        elif key == "$or":
+            if not any(_matches_filters(metadata, condition) for condition in expected):
+                return False
+        elif isinstance(expected, dict):
+            if "$eq" in expected and metadata.get(key) != expected["$eq"]:
+                return False
+            if "$lte" in expected:
+                actual = metadata.get(key)
+                if actual is None or actual > expected["$lte"]:
+                    return False
+            if "$gte" in expected:
+                actual = metadata.get(key)
+                if actual is None or actual < expected["$gte"]:
+                    return False
+        elif metadata.get(key) != expected:
+            return False
+    return True
 
 
 # Singleton instance

@@ -67,6 +67,11 @@ class CrossEncoderReranker:
                     extraction_method=cand.extraction_method,
                     score=round(float(score), 4),
                     rank=rank,
+                    doc_id=cand.doc_id,
+                    version=cand.version,
+                    effective_date=cand.effective_date,
+                    status=cand.status,
+                    file_hash=cand.file_hash,
                     metadata=cand.metadata,
                 )
             )

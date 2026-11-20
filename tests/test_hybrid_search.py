@@ -212,6 +212,7 @@ def test_hybrid_rerank_respects_top_k_between_one_and_twenty() -> None:
         def __init__(self, candidates: list[SearchResult]) -> None:
             self.candidates = candidates
             self.requested_k: list[int] = []
+            self.chunks: list[DocumentChunk] = []
 
         def search(self, query: str, k: int, filters: dict | None = None) -> list[SearchResult]:
             self.requested_k.append(k)

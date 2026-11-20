@@ -41,6 +41,9 @@ def test_generator_sends_model_and_cited_context_to_ollama(
         section="Annual Leave",
         score=0.8,
         rank=1,
+        doc_id="leave_policy",
+        version="2.0",
+        effective_date="2025-04-01",
         metadata={},
     )
 
@@ -51,4 +54,7 @@ def test_generator_sends_model_and_cited_context_to_ollama(
     assert request_data["body"]["model"] == "test-policy-model"
     assert request_data["body"]["stream"] is False
     assert REFUSAL_RESPONSE in request_data["body"]["system"]
-    assert "Document: Leave.pdf; Page: 2; Section: Annual Leave" in request_data["body"]["prompt"]
+    assert (
+        "Document: Leave.pdf; Page: 2; Section: Annual Leave; "
+        "Version: 2.0; Effective date: 2025-04-01"
+    ) in request_data["body"]["prompt"]

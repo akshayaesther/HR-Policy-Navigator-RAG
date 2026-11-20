@@ -1,6 +1,7 @@
 """Search data models and retrieval result schemas."""
 
-from typing import Dict, Any, Literal
+from datetime import date
+from typing import Dict, Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -20,4 +21,9 @@ class SearchResult(BaseModel):
     extraction_method: str = Field(default="text", description="Extraction method: text, table, or ocr")
     score: float = Field(description="Relevance or fusion score")
     rank: int = Field(description="1-based retrieval ranking position")
+    doc_id: Optional[str] = None
+    version: Optional[str] = None
+    effective_date: Optional[date] = None
+    status: Optional[Literal["active", "superseded"]] = None
+    file_hash: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Full metadata attributes")

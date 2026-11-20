@@ -6,11 +6,12 @@ for high-precision enterprise document retrieval.
 
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
+from datetime import date
 
 from backend.config import get_settings
 from backend.models.document import DocumentChunk
 from backend.models.search import SearchResult, RetrievalMode
-from backend.embeddings.vector_store import ChromaVectorStore, get_vector_store
+from backend.embeddings.vector_store import ChromaVectorStore, get_vector_store, version_key
 from backend.retrieval.bm25_index import BM25Index, get_bm25_index
 from backend.retrieval.reranker import CrossEncoderReranker, get_reranker
 
@@ -76,6 +77,11 @@ def reciprocal_rank_fusion(
                 extraction_method=original.extraction_method,
                 score=round(score, 6),
                 rank=rank_idx,
+                doc_id=original.doc_id,
+                version=original.version,
+                effective_date=original.effective_date,
+                status=original.status,
+                file_hash=original.file_hash,
                 metadata=original.metadata,
             )
         )
@@ -114,6 +120,7 @@ class HybridSearchEngine:
         mode: RetrievalMode = "hybrid_rerank",
         filters: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
+        as_of_date: Optional[date] = None,
     ) -> List[SearchResult]:
         """Execute search under specified retrieval mode.
 
@@ -127,6 +134,10 @@ class HybridSearchEngine:
         """
         if mode == "hybrid_rerank" and top_k is not None and not 1 <= top_k <= 20:
             raise ValueError("hybrid_rerank top_k must be between 1 and 20")
+        version_filter = self._policy_version_filter(as_of_date)
+        if not version_filter:
+            return []
+        filters = self._combine_filters(filters, version_filter)
 
         target_top_k = top_k if top_k is not None else (
             5 if mode == "hybrid_rerank" else self.settings.vector_top_k
@@ -196,6 +207,60 @@ class HybridSearchEngine:
                 f"Unknown retrieval mode '{mode}'. Supported modes: 'hybrid', 'dense', 'bm25', 'hybrid_rerank'"
             )
 
+    def _policy_version_filter(self, as_of_date: Optional[date]) -> Dict[str, Any]:
+        """Select active versions or the latest version effective on a requested date."""
+        if not self.bm25_index.chunks:
+            return {"status": "active"}
+
+        versions_by_family: Dict[str, List[DocumentChunk]] = defaultdict(list)
+        for chunk in self.bm25_index.chunks:
+            if chunk.doc_id:
+                versions_by_family[chunk.doc_id].append(chunk)
+
+        selected: List[Dict[str, Any]] = []
+        for doc_id, chunks in versions_by_family.items():
+            versions: Dict[tuple[str, Optional[str]], DocumentChunk] = {}
+            for chunk in chunks:
+                if as_of_date is None:
+                    if chunk.status != "active":
+                        continue
+                elif not chunk.effective_date or chunk.effective_date > as_of_date.isoformat():
+                    continue
+                key = (chunk.version or "", chunk.effective_date)
+                versions[key] = chunk
+
+            if as_of_date is None:
+                selected.extend(
+                    {"$and": [{"doc_id": doc_id}, {"version": version}]}
+                    if version
+                    else {"doc_id": doc_id}
+                    for version, _ in versions
+                )
+            elif versions:
+                selected_version, _ = max(
+                    versions,
+                    key=lambda item: version_key(item[0], item[1]),
+                )
+                selected.append(
+                    {"$and": [{"doc_id": doc_id}, {"version": selected_version}]}
+                    if selected_version
+                    else {"doc_id": doc_id}
+                )
+
+        if not selected:
+            return {}
+        return selected[0] if len(selected) == 1 else {"$or": selected}
+
+    @staticmethod
+    def _combine_filters(
+        filters: Optional[Dict[str, Any]],
+        version_filter: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Apply user metadata constraints together with policy version selection."""
+        if filters and version_filter:
+            return {"$and": [filters, version_filter]}
+        return filters or version_filter
+
 
 # Module-level singleton
 _engine_instance: Optional[HybridSearchEngine] = None
@@ -214,6 +279,7 @@ def hybrid_search(
     mode: RetrievalMode = "hybrid_rerank",
     filters: Optional[Dict[str, Any]] = None,
     top_k: Optional[int] = None,
+    as_of_date: Optional[date] = None,
 ) -> List[SearchResult]:
     """Unified entrypoint for policy retrieval across comparison modes.
 
@@ -223,9 +289,16 @@ def hybrid_search(
         filters: Optional metadata filters (e.g. {'category': 'hr_policy', 'source': 'WFH_Policy.pdf'}).
         top_k: Optional result count. hybrid_rerank accepts values from 1 through 20
             and defaults to 5.
+        as_of_date: Select the latest policy versions that were effective on this date.
 
     Returns:
         List[SearchResult] ordered by relevance.
     """
     engine = get_search_engine()
-    return engine.search(query=query, mode=mode, filters=filters, top_k=top_k)
+    return engine.search(
+        query=query,
+        mode=mode,
+        filters=filters,
+        top_k=top_k,
+        as_of_date=as_of_date,
+    )

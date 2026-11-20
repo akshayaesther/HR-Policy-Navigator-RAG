@@ -21,6 +21,12 @@ from backend.ingestion.cleaner import (
     detect_and_remove_headers_footers,
     compute_quality_score,
 )
+from backend.ingestion.policy_metadata import (
+    add_policy_metadata,
+    derive_doc_id,
+    extract_policy_metadata,
+    file_sha256,
+)
 
 SECTION_HEADING_REGEX = re.compile(
     r"^(?:Section\s+\d+[:\.]?|SECTION\s+\d+[:\.]?|\d+\.\s+[A-Z\s]{3,}|#{1,4}\s+|[A-Z\s]{5,}:)",
@@ -61,9 +67,20 @@ class DocumentLoader:
             )
 
         if suffix == ".pdf":
-            return self._load_pdf(file_path)
+            chunks, report = self._load_pdf(file_path)
         else:
-            return self._load_markdown(file_path)
+            chunks, report = self._load_markdown(file_path)
+
+        extracted_text = "\n".join(chunk.content for chunk in chunks)
+        metadata = extract_policy_metadata(extracted_text)
+        add_policy_metadata(
+            chunks,
+            doc_id=derive_doc_id(file_path.name),
+            version=metadata["version"],
+            effective_date=metadata["effective_date"],
+            file_hash=file_sha256(file_path),
+        )
+        return chunks, report
 
     def _load_pdf(self, file_path: Path) -> Tuple[List[DocumentChunk], IngestionReport]:
         """Extract content from PDF with two-column sorting, tables, OCR, and cleaning."""
